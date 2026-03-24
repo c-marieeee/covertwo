@@ -18,187 +18,114 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 )
 
-const (
-	s3BucketURL        = "covertwo"                          // S3 bucket name
-	s3BlocklistKey     = "blocklist.txt"                     // S3 object key
-	localBlocklistPath = "/var/db/covertwo/blocklist.txt"    // Path to the local blocklist file
-	processedBlocklist = "/var/db/covertwo/processed.txt"    // Path to the processed blocklist
-	pfAnchorName       = "com.example.covertwo"              // Name of the PF anchor
-	syncInterval       = 60 * time.Second                    // Interval for syncing the blocklist
+// Configuration via Environment Variables with defaults
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+var (
+	s3Bucket       = getEnv("COVERTWO_BUCKET", "your-public-bucket")
+	s3Key          = getEnv("COVERTWO_KEY", "blocklist.txt")
+	awsRegion      = getEnv("AWS_REGION", "us-east-1")
+	pfAnchor       = getEnv("COVERTWO_PF_ANCHOR", "com.user.covertwo")
+	dbPath         = getEnv("COVERTWO_DB_PATH", "/usr/local/var/db/covertwo")
+	syncIntervalSeconds = 60 
 )
 
 func main() {
-	// Ensure the local blocklist directory exists
-	if err := os.MkdirAll("/var/db/covertwo", 0755); err != nil {
-		logWithTimestamp(fmt.Sprintf("Error creating blocklist directory: %v", err))
+	// 1. Ensure directory exists
+	if err := os.MkdirAll(dbPath, 0755); err != nil {
+		logWithTimestamp(fmt.Sprintf("Init Error: %v", err))
 		os.Exit(1)
 	}
 
-	// Ensure PF is enabled
+	// 2. PF Check
 	if err := ensurePFEnabled(); err != nil {
-		logWithTimestamp(fmt.Sprintf("Error ensuring PF is enabled: %v", err))
+		logWithTimestamp(fmt.Sprintf("PF Error: %v", err))
+		log.Println("Note: This service requires sudo/root permissions to manage PF.")
 		os.Exit(1)
 	}
 
-	// Set up signal handling for graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	// Start the sync loop
 	go func() {
 		for {
-			logWithTimestamp("Starting blocklist sync...")
-
-			// Sync the blocklist
+			logWithTimestamp("Syncing blocklist...")
 			if err := syncBlocklist(); err != nil {
-				logWithTimestamp(fmt.Sprintf("Error syncing blocklist: %v", err))
-			} else {
-				logWithTimestamp("Blocklist synced successfully.")
+				logWithTimestamp(fmt.Sprintf("Sync Error: %v", err))
 			}
-
-			// Countdown to the next sync
-			countdownTimer(syncInterval)
+			time.Sleep(time.Duration(syncIntervalSeconds) * time.Second)
 		}
 	}()
 
-	// Wait for a signal to stop
 	<-stop
-	logWithTimestamp("Shutting down...")
+	logWithTimestamp("Shutting down gracefully.")
 }
 
-// ensurePFEnabled checks if PF is enabled and enables it if necessary.
 func ensurePFEnabled() error {
-	cmd := exec.Command("pfctl", "-s", "info")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error checking PF status: %v", err)
+	cmd := exec.Command("pfctl", "-e")
+	output, _ := cmd.CombinedOutput() // -e returns error if already enabled, so we check status instead
+	
+	statusCmd := exec.Command("pfctl", "-s", "info")
+	statusOut, _ := statusCmd.Output()
+	if !strings.Contains(string(statusOut), "Status: Enabled") {
+		return fmt.Errorf("could not enable PF. Output: %s", string(output))
 	}
-
-	if !strings.Contains(string(output), "Status: Enabled") {
-		cmd := exec.Command("pfctl", "-e")
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("error enabling PF: %v, output: %s", err, string(output))
-		}
-		logWithTimestamp("PF enabled successfully.")
-	} else {
-		logWithTimestamp("PF is already enabled.")
-	}
-
 	return nil
 }
 
-// syncBlocklist downloads and processes the blocklist from S3, then applies it.
 func syncBlocklist() error {
-	remoteBlocklist, err := downloadBlocklist()
+	sess, err := session.NewSession(&aws.Config{Region: aws.String(awsRegion)})
 	if err != nil {
-		return fmt.Errorf("failed to download blocklist: %v", err)
-	}
-
-	// Validate and process the blocklist
-	processed, err := processBlocklist(remoteBlocklist)
-	if err != nil {
-		return fmt.Errorf("failed to process blocklist: %v", err)
-	}
-
-	// Check if the blocklist has changed
-	localBlocklistContent, err := os.ReadFile(processedBlocklist)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to read processed blocklist: %v", err)
-	}
-
-	if string(localBlocklistContent) == string(processed) {
-		logWithTimestamp("No changes in blocklist detected.")
-		return nil // No changes
-	}
-
-	// Save the processed blocklist
-	if err := os.WriteFile(processedBlocklist, processed, 0644); err != nil {
-		return fmt.Errorf("failed to write processed blocklist: %v", err)
-	}
-
-	// Apply the blocklist
-	if err := applyBlocklist(processed); err != nil {
-		return fmt.Errorf("failed to apply blocklist: %v", err)
-	}
-
-	return nil
-}
-
-// downloadBlocklist fetches the blocklist from the S3 bucket.
-func downloadBlocklist() ([]byte, error) {
-	sess, err := session.NewSession(&aws.Config{
-		Region: aws.String("us-east-1"),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AWS session: %v", err)
+		return err
 	}
 
 	svc := s3.New(sess)
-	input := &s3.GetObjectInput{
-		Bucket: aws.String(s3BucketURL),
-		Key:    aws.String(s3BlocklistKey),
-	}
-
-	result, err := svc.GetObject(input)
+	result, err := svc.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s3Bucket),
+		Key:    aws.String(s3Key),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to download blocklist: %v", err)
+		return err
 	}
 	defer result.Body.Close()
 
-	return io.ReadAll(result.Body)
+	content, _ := io.ReadAll(result.Body)
+	processed := processBlocklist(content)
+
+	processedFile := fmt.Sprintf("%s/processed.txt", dbPath)
+	oldContent, _ := os.ReadFile(processedFile)
+
+	if string(oldContent) == string(processed) {
+		return nil // No changes
+	}
+
+	os.WriteFile(processedFile, processed, 0644)
+	return applyToPF(processed)
 }
 
-// processBlocklist validates and processes the blocklist content.
-func processBlocklist(content []byte) ([]byte, error) {
+func processBlocklist(content []byte) []byte {
 	lines := strings.Split(string(content), "\n")
 	var validIPs []string
-
 	for _, line := range lines {
-		// Remove everything after the first '#' (including the '#')
-		if strings.Contains(line, "#") {
-			line = strings.SplitN(line, "#", 2)[0]
-		}
-
-		// Trim whitespace and validate the IP
-		ip := strings.TrimSpace(line)
-		if ip == "" {
-			continue
-		}
-
-		if net.ParseIP(ip) != nil {
-			validIPs = append(validIPs, ip)
-		} else {
-			logWithTimestamp(fmt.Sprintf("Invalid IP skipped: %s", line))
+		clean := strings.TrimSpace(strings.Split(line, "#")[0])
+		if clean != "" && net.ParseIP(clean) != nil {
+			validIPs = append(validIPs, clean)
 		}
 	}
-
-	return []byte(strings.Join(validIPs, "\n")), nil
+	return []byte(strings.Join(validIPs, "\n"))
 }
 
-// applyBlocklist applies the processed blocklist using pfctl.
-func applyBlocklist(blocklist []byte) error {
-	cmd := exec.Command("pfctl", "-a", pfAnchorName, "-t", "blocklist", "-T", "replace", "-f", "-")
+func applyToPF(blocklist []byte) error {
+	cmd := exec.Command("pfctl", "-a", pfAnchor, "-t", "blocklist", "-T", "replace", "-f", "-")
 	cmd.Stdin = bytes.NewReader(blocklist)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to apply blocklist: %v, output: %s", err, string(output))
-	}
-	logWithTimestamp("Blocklist applied successfully.")
-	return nil
+	return cmd.Run()
 }
 
-// countdownTimer displays a countdown timer for the next sync.
-func countdownTimer(duration time.Duration) {
-	for i := int(duration.Seconds()); i > 0; i-- {
-		fmt.Printf("\rNext sync in %d seconds...", i)
-		time.Sleep(1 * time.Second)
-	}
-	fmt.Println() // Move to the next line after the countdown
+func logWithTimestamp(msg string) {
+	log.Printf("[%s] %s\n", time.Now().Format(time.RFC3339), msg)
 }
-
-// logWithTimestamp logs a message with a timestamp.
-func logWithTimestamp(message string) {
-	log.Printf("[%s] %s\n", time.Now().UTC().Format(time.RFC3339), message)
-}
-
