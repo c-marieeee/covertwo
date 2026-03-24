@@ -1,204 +1,169 @@
 #!/bin/bash
 
-# Config
-BUCKET_NAME="covertwo"
-FILE_NAME="blocklist.txt"
-LOCAL_FILE="/tmp/$FILE_NAME"
-LOG_FILE="/tmp/blocklist_changes.log"
-CHANGES_LOG="/tmp/changes_summary.log"
+# --- Configuration & Setup ---
+CONFIG_FILE="$HOME/.covertwo_config"
 
-# Tracks changes made during the session
+# Function to initialize or load user settings
+load_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+    else
+        echo "=== CoverTwo First-Time Setup ==="
+        read -p "Enter your AWS S3 Bucket Name: " BUCKET_NAME
+        read -p "Enter Blocklist Filename [default: blocklist.txt]: " FILE_NAME
+        FILE_NAME=${FILE_NAME:-blocklist.txt}
+        
+        echo "BUCKET_NAME=\"$BUCKET_NAME\"" > "$CONFIG_FILE"
+        echo "FILE_NAME=\"$FILE_NAME\"" >> "$CONFIG_FILE"
+        echo "Configuration saved to $CONFIG_FILE"
+        echo "---------------------------------"
+    fi
+}
+
+# Ensure AWS CLI is installed
+if ! command -v aws &> /dev/null; then
+    echo "Error: AWS CLI is not installed. Please install it to use CoverTwo."
+    exit 1
+fi
+
+load_config
+
+LOCAL_FILE="/tmp/$FILE_NAME"
+LOG_FILE="/tmp/covertwo_changes.log"
 ADDITIONS=()
 REMOVALS=()
 
-# Logs changes to the log file
+# --- Core Functions ---
+
 log_change() {
     local message=$1
     echo "$(date -u '+%Y-%m-%d %H:%M:%S') | $message" >> "$LOG_FILE"
 }
 
-# Downloads the file from S3
 download_file() {
-    echo "Downloading $FILE_NAME from S3..."
-    if aws s3 cp "s3://$BUCKET_NAME/$FILE_NAME" "$LOCAL_FILE"; then
-        echo "Download complete."
+    echo "Syncing with S3..."
+    if aws s3 cp "s3://$BUCKET_NAME/$FILE_NAME" "$LOCAL_FILE" 2>/dev/null; then
+        echo "Latest blocklist downloaded."
     else
-        echo "Failed to download the file. Check your S3 configuration."
-        exit 1
+        echo "Blocklist not found on S3. Creating a new local file."
+        echo "# CoverTwo Blocklist" > "$LOCAL_FILE"
     fi
 }
 
-# Uploads the file back to S3 with retries
 upload_file() {
     local attempts=3
-    local success=0
-
-    echo "Uploading $FILE_NAME back to S3..."
+    echo "Uploading updates to S3..."
     for ((i = 1; i <= attempts; i++)); do
         if aws s3 cp "$LOCAL_FILE" "s3://$BUCKET_NAME/$FILE_NAME"; then
-            echo "File successfully updated on S3."
-            success=1
-            break
-        else
-            echo "Upload failed. Attempt $i of $attempts."
+            echo "S3 successfully updated."
+            return 0
         fi
+        echo "Upload attempt $i failed. Retrying..."
+        sleep 1
     done
-
-    if [[ $success -ne 1 ]]; then
-        echo "Failed to upload the file after $attempts attempts. Please manually upload $LOCAL_FILE."
-        exit 1
-    fi
+    echo "Critical: Failed to sync with S3. Please check your credentials."
+    exit 1
 }
 
-# Displays the file contents
-view_file() {
-    echo "Downloading the latest blocklist from S3..."
-    download_file
-
-    echo "Current Blocked IPs:"
-    if [[ -f "$LOCAL_FILE" ]]; then
-        cat "$LOCAL_FILE"
-    else
-        echo "No blocklist file found."
-    fi
-    echo "------------------------------------"
-}
-
-# Validates IP
 validate_ip() {
     local ip=$1
     local valid_ip_regex='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
     if [[ $ip =~ $valid_ip_regex ]]; then
         IFS='.' read -r -a octets <<< "$ip"
         for octet in "${octets[@]}"; do
-            if ((octet < 0 || octet > 255)); then
-                return 1
-            fi
+            if ((octet < 0 || octet > 255)); then return 1; fi
         done
         return 0
     fi
     return 1
 }
 
-# Adds IP
+view_file() {
+    download_file
+    echo "--- Current Blocklist ---"
+    if [[ -s "$LOCAL_FILE" ]]; then
+        cat "$LOCAL_FILE"
+    else
+        echo "[List is empty]"
+    fi
+    echo "-------------------------"
+}
+
 add_ip() {
-    read -p "Enter the IP address to add: " new_ip
-
+    read -p "Enter the IP address to block: " new_ip
     if ! validate_ip "$new_ip"; then
-        echo "Invalid IP address."
+        echo "Error: Invalid IP format."
         return
     fi
 
-    echo "Categories:"
-    echo "1. Malicious"
-    echo "2. Spam"
-    echo "3. Suspicious"
-    echo "4. Other"
-    read -p "Select a category (1-4): " category
-
-    if ! [[ "$category" =~ ^[1-4]$ ]]; then
-        echo "Invalid category. Please choose a number between 1 and 4."
-        return
-    fi
-
-    case $category in
+    echo "Select Category: 1) Malicious 2) Spam 3) Suspicious 4) Other"
+    read -p "Choice [1-4]: " cat_choice
+    case $cat_choice in
         1) CATEGORY="Malicious" ;;
         2) CATEGORY="Spam" ;;
         3) CATEGORY="Suspicious" ;;
-        4) CATEGORY="Other" ;;
+        *) CATEGORY="Other" ;;
     esac
 
+    # Grab macOS Serial for audit trail
+    serial=$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}')
     timestamp=$(date -u '+%Y-%m-%d %H:%M:%S')
 
-    # Retrieve system serial number (macOS-specific)
-    serial_number=$(system_profiler SPHardwareDataType | awk '/Serial/ {print $4}')
-
     if grep -Fq "$new_ip" "$LOCAL_FILE"; then
-        echo "IP address $new_ip is already in the list."
+        echo "IP $new_ip is already blocked."
     else
-        new_entry="$new_ip # | $CATEGORY | Serial: $serial_number | Added on $timestamp"
-        # Add the new entry at the top of the blocklist using a temporary file
-        {
-            echo "$new_entry"
-            cat "$LOCAL_FILE"
-        } > "$LOCAL_FILE.tmp" && mv "$LOCAL_FILE.tmp" "$LOCAL_FILE"
-        echo "IP address $new_ip added to the blocklist."
-        ADDITIONS+=("$new_ip $new_entry")
-        log_change "Added: $new_ip $new_entry"
+        entry="$new_ip # | $CATEGORY | Source: $serial | Added: $timestamp"
+        echo "$entry" | cat - "$LOCAL_FILE" > "$LOCAL_FILE.tmp" && mv "$LOCAL_FILE.tmp" "$LOCAL_FILE"
+        ADDITIONS+=("$new_ip")
+        log_change "Added: $new_ip"
+        echo "Added $new_ip to list."
     fi
 }
 
-# Removes IP
 remove_ip() {
-    read -p "Enter the IP address to remove: " remove_ip
-
-    if ! validate_ip "$remove_ip"; then
-        echo "Invalid IP address."
-        return
-    fi
-
-    if grep -Fq "$remove_ip" "$LOCAL_FILE"; then
-        grep -v "$remove_ip" "$LOCAL_FILE" > "$LOCAL_FILE.tmp" && mv "$LOCAL_FILE.tmp" "$LOCAL_FILE"
-        echo "IP address $remove_ip removed from the list."
-        REMOVALS+=("$remove_ip")
-        log_change "Removed: $remove_ip"
+    read -p "Enter the IP to remove: " target_ip
+    if grep -Fq "$target_ip" "$LOCAL_FILE"; then
+        grep -v "$target_ip" "$LOCAL_FILE" > "$LOCAL_FILE.tmp" && mv "$LOCAL_FILE.tmp" "$LOCAL_FILE"
+        REMOVALS+=("$target_ip")
+        log_change "Removed: $target_ip"
+        echo "Removed $target_ip."
     else
-        echo "IP address $remove_ip not found in the list."
+        echo "IP not found."
     fi
 }
 
-# Creates a backup of the file
-backup_file() {
-    cp "$LOCAL_FILE" "$LOCAL_FILE.bak"
-    echo "Backup created at $LOCAL_FILE.bak"
-}
-
-# Exits the script with a summary
 exit_script() {
-    if [[ ${#ADDITIONS[@]} -eq 0 && ${#REMOVALS[@]} -eq 0 ]]; then
-        echo "No changes were made."
-    else
-        echo "Summary of changes:"
-        [[ ${#ADDITIONS[@]} -gt 0 ]] && echo "Added entries:" && printf "  %s\n" "${ADDITIONS[@]}"
-        [[ ${#REMOVALS[@]} -gt 0 ]] && echo "Removed entries:" && printf "  %s\n" "${REMOVALS[@]}"
-    fi
-
     if [[ ${#ADDITIONS[@]} -gt 0 || ${#REMOVALS[@]} -gt 0 ]]; then
-        echo "Saving changes before exiting..."
-        backup_file
+        echo "Summary of changes:"
+        [[ ${#ADDITIONS[@]} -gt 0 ]] && echo "  + Added: ${ADDITIONS[*]}"
+        [[ ${#REMOVALS[@]} -gt 0 ]] && echo "  - Removed: ${REMOVALS[*]}"
         upload_file
+    else
+        echo "No changes made."
     fi
-
-    echo "Exiting CoverTwo Updater. Goodbye!"
+    rm -f "$LOCAL_FILE" "$LOCAL_FILE.tmp"
+    echo "Goodbye!"
     exit 0
 }
 
-# Ensures the blocklist file is initialized
-if [[ ! -f "$LOCAL_FILE" || ! -s "$LOCAL_FILE" ]]; then
-    echo "# Blocklist | Example" > "$LOCAL_FILE"
-fi
+# --- Main Logic ---
+download_file
 
-# Automatically downloads the file from S3 if it doesn't exist locally
-if [[ ! -f "$LOCAL_FILE" ]]; then
-    download_file
-fi
-
-# Main interactive menu
 while true; do
     echo ""
-    echo "=== CoverTwo Updater ==="
+    echo "=== CoverTwo Management CLI ==="
     echo "1. View Blocklist"
-    echo "2. Add an IP"
-    echo "3. Remove an IP"
-    echo "4. Exit"
-    read -p "Choose an option: " choice
+    echo "2. Add IP"
+    echo "3. Remove IP"
+    echo "4. Exit & Sync"
+    read -p "Selection: " choice
 
     case $choice in
         1) view_file ;;
         2) add_ip ;;
         3) remove_ip ;;
         4) exit_script ;;
-        *) echo "Invalid option. Please try again." ;;
+        *) echo "Invalid choice." ;;
     esac
 done
 
