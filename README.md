@@ -6,9 +6,7 @@
 
 ## The Problem
 
-Most enterprise macOS environments can block malicious **domains** through tools like Cisco Umbrella or Carbon Black. These are good tools. But threat actors know this — they rotate domains constantly. What changes far less often is the IP address behind the infrastructure.
-
-Umbrella doesn't offer IP-level blocking. Carbon Black doesn't fill that gap on macOS either. That means even with best-in-class DNS security in place, a machine can still reach a known-malicious IP directly — bypassing every domain-based control you have.
+Most enterprise macOS environments can block malicious **domains** through tools like Cisco Umbrella or Carbon Black. That means even with best-in-class DNS security in place, a machine can still reach a known-malicious IP directly — bypassing every domain-based control you have.
 
 CoverTwo was built to fix that. It maintains a centrally managed, continuously synced IP blocklist enforced at the network layer via macOS Packet Filter (PF). If your DNS tooling is the first safety, CoverTwo is the second — hence the name.
 
