@@ -1,0 +1,33 @@
+title: CoverTwo Repeated Sync Failure
+id: c2-002
+status: stable
+description: >
+  A CoverTwo daemon has failed to sync the blocklist from S3 three or more times
+  in a 15-minute window. This may indicate credential expiry (IAM Roles Anywhere
+  certificate issues), S3 bucket policy changes, network-level blocking of AWS
+  endpoints, or an attacker attempting to prevent blocklist updates.
+references:
+  - https://github.com/your-org/covertwo
+author: c-marieeee
+date: 2026-03-27
+tags:
+  - attack.defense_evasion
+  - attack.T1562.001
+  - attack.T1485     # Data Destruction (blocklist cleared)
+logsource:
+  product: splunk
+  index: security
+  sourcetype: covertwo:daemon
+detection:
+  selection:
+    event_type: sync_failure
+  timeframe: 15m
+  condition: selection | count() >= 3
+fields:
+  - machine_id
+  - host
+  - error
+falsepositives:
+  - Transient AWS S3 outage
+  - Certificate rotation in progress
+level: high

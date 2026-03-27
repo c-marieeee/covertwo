@@ -1,0 +1,19 @@
+[package]
+name = "covertwo-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "covertwo-daemon"
+path = "src/main.rs"
+
+[dependencies]
+covertwo-core = { path = "../covertwo-core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

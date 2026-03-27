@@ -1,0 +1,36 @@
+title: CoverTwo Blocklist Modified
+id: c2-003
+status: stable
+description: >
+  An entry has been added to or removed from the CoverTwo blocklist.
+  All changes are expected to originate from the security team via the CLI or
+  web UI and should correspond to a known threat-response or IR action.
+  Unexpected changes — wrong actor, unknown IP, or changes outside business
+  hours — should be investigated.
+references:
+  - https://github.com/your-org/covertwo
+author: c-marieeee
+date: 2026-03-27
+tags:
+  - attack.defense_evasion
+  - attack.T1562.001
+  - attack.T1070     # Indicator Removal (entry removed to unblock attacker IP)
+logsource:
+  product: splunk
+  index: security
+  sourcetype: covertwo:daemon
+detection:
+  selection:
+    event_type|in:
+      - rule_added
+      - rule_removed
+  condition: selection
+fields:
+  - event_type
+  - machine_id
+  - host
+  - value
+  - added_by
+falsepositives:
+  - Routine security team updates to the blocklist
+level: medium

@@ -1,0 +1,23 @@
+[package]
+name = "covertwo-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "covertwo-web"
+path = "src/main.rs"
+
+[dependencies]
+covertwo-core = { path = "../covertwo-core" }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }

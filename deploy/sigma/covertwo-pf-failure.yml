@@ -1,0 +1,32 @@
+title: CoverTwo PF Apply Failure
+id: c2-004
+status: stable
+description: >
+  The CoverTwo daemon successfully downloaded an updated blocklist from S3 but
+  failed to apply it to PF. This means the machine's firewall rules are stale
+  and potentially blocking nothing. Could indicate PF was disabled externally,
+  the daemon lost root privileges, or the system is under active compromise.
+references:
+  - https://github.com/your-org/covertwo
+author: c-marieeee
+date: 2026-03-27
+tags:
+  - attack.defense_evasion
+  - attack.T1562.001  # Impair Defenses: Disable or Modify Tools
+  - attack.T1562.004  # Impair Defenses: Disable or Modify System Firewall
+logsource:
+  product: splunk
+  index: security
+  sourcetype: covertwo:daemon
+detection:
+  selection:
+    event_type: pf_apply_failure
+  condition: selection
+fields:
+  - machine_id
+  - host
+  - error
+falsepositives:
+  - macOS system upgrade temporarily disabling PF
+  - Manual pfctl manipulation by IT during maintenance
+level: critical

@@ -1,0 +1,32 @@
+title: CoverTwo Daemon Heartbeat Missing
+id: c2-001
+status: stable
+description: >
+  A CoverTwo daemon has not sent a heartbeat event to Splunk in over 15 minutes.
+  This may indicate the daemon has crashed, the machine is offline, PF rules are
+  unmanaged, or the S3/Splunk connectivity has failed.
+references:
+  - https://github.com/your-org/covertwo
+author: c-marieeee
+date: 2026-03-27
+tags:
+  - attack.defense_evasion
+  - attack.T1562.001  # Impair Defenses: Disable or Modify Tools
+logsource:
+  product: splunk
+  index: security
+  sourcetype: covertwo:daemon
+detection:
+  selection:
+    event_type: heartbeat_sent
+  timeframe: 15m
+  condition: selection | count() < 1
+fields:
+  - machine_id
+  - host
+  - rule_count
+  - last_sync_ok
+falsepositives:
+  - Machine legitimately powered off or in a maintenance window
+  - Network outage affecting Splunk HEC reachability
+level: high

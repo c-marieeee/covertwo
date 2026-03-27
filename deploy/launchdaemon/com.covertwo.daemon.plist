@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Service identity -->
+    <key>Label</key>
+    <string>com.covertwo.daemon</string>
+
+    <!-- Binary path -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/covertwo-daemon</string>
+        <string>/etc/covertwo/config.toml</string>
+    </array>
+
+    <!-- Start at boot, not just at login -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart automatically on crash -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Throttle restarts: wait 10s before restarting after a failure -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Environment: tells AWS SDK where to find the credential_process config -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AWS_CONFIG_FILE</key>
+        <string>/etc/covertwo/aws-config</string>
+        <key>RUST_LOG</key>
+        <string>info</string>
+    </dict>
+
+    <!-- Logs — captured by macOS unified logging and readable via Console.app -->
+    <key>StandardOutPath</key>
+    <string>/var/log/covertwo/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/covertwo/daemon.error.log</string>
+
+    <!-- Run as root (required for pfctl) -->
+    <key>UserName</key>
+    <string>root</string>
+
+    <!-- Prevent the daemon from writing to the user session -->
+    <key>SessionCreate</key>
+    <false/>
+</dict>
+</plist>

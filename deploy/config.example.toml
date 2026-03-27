@@ -1,0 +1,29 @@
+# /etc/covertwo/config.toml — deployed by Jamf, not edited manually on endpoints
+# On admin machines (for CLI / web UI), store at ~/.config/covertwo/config.toml
+
+[aws]
+region         = "us-east-1"
+bucket         = "covertwo"          # S3 bucket name
+blocklist_key  = "blocklist.json"    # Main blocklist object
+trigger_key    = "trigger.txt"       # Touched by `covertwo trigger` for emergency push
+heartbeat_prefix = "heartbeats/"     # Per-machine heartbeat objects
+audit_prefix   = "audit/"            # Audit trail (YYYY/MM/DD/<uuid>.json)
+
+[sync]
+interval_secs     = 60   # Full sync every N seconds
+trigger_poll_secs = 5    # Trigger file ETag poll interval (emergency detection)
+
+[pf]
+anchor_name = "com.covertwo.blocklist"
+table_name  = "blocklist"
+
+[splunk]
+hec_url    = "https://splunk.yourcompany.com:8088"
+hec_token  = "YOUR_SPLUNK_HEC_TOKEN"
+index      = "security"
+sourcetype = "covertwo:daemon"
+
+# web section — only needed when running covertwo-web
+[web]
+bind_addr = "127.0.0.1:8080"
+api_token = "GENERATE_A_STRONG_RANDOM_TOKEN"   # e.g. openssl rand -hex 32
